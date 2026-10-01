@@ -273,7 +273,7 @@
     </div>
 
     <script>
-        // Google Apps Script Web App Endpoint URL
+        // Endpoint Google Apps Script Web App Anda
         const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxaretRu9wGxAi9rtuhDkwIL6qoux3hUhdp_pTMN29uJLNbkfAa_yn1ejPBucRWGUs-/exec';
 
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -472,11 +472,12 @@
             if (!itemsHTML) {
                 summaryBox.innerHTML = `<p class="text-slate-400 text-center py-4">Belum ada file diunggah.</p>`;
                 document.getElementById('grand-total-price').innerText = 'Rp 0';
-                return;
+                return 0;
             }
 
             summaryBox.innerHTML = itemsHTML;
             document.getElementById('grand-total-price').innerText = `Rp ${totalEst.toLocaleString('id-ID')}`;
+            return totalEst;
         }
 
         async function submitCustomerOrder() {
@@ -488,126 +489,111 @@
                 return;
             }
 
-            if (currentUploadType === 'pdf' && !pdfFileData) {
-                showToast('Silakan unggah file PDF terlebih dahulu!', 'fa-triangle-exclamation');
-                return;
+            let fileInput = null;
+            if (currentUploadType === 'pdf') {
+                fileInput = document.getElementById('file-pdf').files[0];
+            } else {
+                fileInput = document.getElementById('file-photo').files[0];
             }
 
-            if (currentUploadType === 'photo' && !photoFileData) {
-                showToast('Silakan unggah foto terlebih dahulu!', 'fa-triangle-exclamation');
+            if (!fileInput) {
+                showToast('Silakan pilih file terlebih dahulu!', 'fa-triangle-exclamation');
                 return;
             }
 
             const submitBtn = document.getElementById('btn-submit-order');
             submitBtn.disabled = true;
-            submitBtn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Mengirim Pesanan...`;
+            submitBtn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Mengirim File & Pesanan...`;
 
-            const copies = parseInt(document.getElementById('opt-copies').value) || 1;
-            const paperSize = document.getElementById('opt-paper-size').value;
-            const paperType = document.getElementById('opt-paper-type').value;
-            const finishing = document.getElementById('opt-finishing').value;
-            const notes = document.getElementById('opt-notes').value.trim();
+            // Pembacaan File menjadi Base64 untuk dikirim ke Google Drive via GAS
+            const reader = new FileReader();
+            reader.readAsDataURL(fileInput);
+            reader.onload = async function () {
+                const fileBase64 = reader.result;
 
-            // Generate 6-digit Order ID
-            const orderCode = 'ORD-' + Math.floor(100000 + Math.random() * 900000);
+                const copies = parseInt(document.getElementById('opt-copies').value) || 1;
+                const paperSize = document.getElementById('opt-paper-size').value;
+                const paperType = document.getElementById('opt-paper-type').value;
+                const finishing = document.getElementById('opt-finishing').value;
+                const notes = document.getElementById('opt-notes').value.trim();
+                const orderCode = 'ORD-' + Math.floor(100000 + Math.random() * 900000);
 
-            let orderItems = [];
-            if (currentUploadType === 'pdf' && pdfFileData) {
-                if (pdfFileData.bwCount > 0) {
-                    orderItems.push({
-                        name: `Cetak PDF B&W (${pdfFileData.fileName}) - ${paperSize}`,
-                        price: 500,
-                        qty: pdfFileData.bwCount * copies
-                    });
+                const totalPrice = calculateCustomerTotal();
+
+                // Object Payload Sesuai Struktur Google Apps Script
+                const payload = {
+                    orderCode: orderCode,
+                    date: new Date().toLocaleDateString('id-ID') + ' ' + new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+                    customerName: name,
+                    customerPhone: phone,
+                    fileType: currentUploadType.toUpperCase(),
+                    fileName: fileInput.name,
+                    fileBase64: fileBase64,
+                    paperSize: paperSize,
+                    paperType: paperType,
+                    finishing: finishing,
+                    copies: copies,
+                    totalPrice: totalPrice,
+                    notes: notes
+                };
+
+                // Payload Kompatibilitas Lokal Kasir
+                activeOrder = {
+                    orderCode: orderCode,
+                    date: payload.date,
+                    customer: { name: name, phone: phone },
+                    specs: { paperSize, paperType, finishing, notes, copies },
+                    items: [
+                        { name: `File: ${fileInput.name}`, price: totalPrice, qty: 1 }
+                    ],
+                    status: 'MENUNGGU KASIR'
+                };
+
+                // Simpan Lokal & Broadcast ke Layar Kasir
+                let existingOrders = [];
+                try {
+                    existingOrders = JSON.parse(localStorage.getItem('smart_print_online_orders') || '[]');
+                } catch(e) {}
+                existingOrders.push(activeOrder);
+                localStorage.setItem('smart_print_online_orders', JSON.stringify(existingOrders));
+
+                if (broadcastChannel) {
+                    broadcastChannel.postMessage({ type: 'NEW_ORDER', order: activeOrder });
                 }
-                if (pdfFileData.colorCount > 0) {
-                    orderItems.push({
-                        name: `Cetak PDF Warna (${pdfFileData.fileName}) - ${paperSize}`,
-                        price: 1500,
-                        qty: pdfFileData.colorCount * copies
+
+                // Kirim Data Lengkap + File Base64 ke Google Apps Script
+                try {
+                    await fetch(GAS_WEB_APP_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                        body: JSON.stringify(payload)
                     });
+
+                    // Tampilkan Modal QR / Kode Order
+                    document.getElementById('display-order-code').innerText = orderCode;
+                    document.getElementById('modal-cust-info').innerText = `${name} (${phone})`;
+
+                    const qrcodeBox = document.getElementById('qrcode-box');
+                    qrcodeBox.innerHTML = '';
+                    new QRCode(qrcodeBox, { text: orderCode, width: 120, height: 120 });
+
+                    document.getElementById('modal-order-success').classList.remove('hidden');
+                    showToast('Pesanan & File berhasil dikirim!', 'fa-circle-check');
+
+                } catch (err) {
+                    console.error(err);
+                    showToast('Gagal mengirim file ke Google Sheets!', 'fa-triangle-exclamation');
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = `<i class="fa-solid fa-paper-plane"></i> Kirim Pesanan ke Kasir`;
                 }
-            } else if (currentUploadType === 'photo' && photoFileData) {
-                orderItems.push({
-                    name: `Cetak Lembar Foto A4 (${photoFileData.fileName})`,
-                    price: 5000,
-                    qty: copies
-                });
-            }
-
-            if (finishing !== 'Tanpa Jilid') {
-                let fPrice = 0;
-                if (finishing.includes('Mika')) fPrice = 5000;
-                else if (finishing.includes('Softcover')) fPrice = 15000;
-                else if (finishing.includes('Laminasi')) fPrice = 3000;
-                else if (finishing.includes('Staples')) fPrice = 1000;
-
-                orderItems.push({
-                    name: `Finishing: ${finishing}`,
-                    price: fPrice,
-                    qty: copies
-                });
-            }
-
-            const orderPayload = {
-                orderCode,
-                date: new Date().toLocaleDateString('id-ID') + ' ' + new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-                customer: { name, phone },
-                specs: { paperSize, paperType, finishing, notes, copies },
-                items: orderItems,
-                status: 'MENUNGGU KASIR'
             };
-
-            activeOrder = orderPayload;
-
-            // Save to localStorage so cashier application can pick it up
-            let existingOrders = [];
-            try {
-                existingOrders = JSON.parse(localStorage.getItem('smart_print_online_orders') || '[]');
-            } catch(e) {}
-            existingOrders.push(orderPayload);
-            localStorage.setItem('smart_print_online_orders', JSON.stringify(existingOrders));
-
-            // Send Realtime Broadcast Signal to Cashier App
-            if (broadcastChannel) {
-                broadcastChannel.postMessage({ type: 'NEW_ORDER', order: orderPayload });
-            }
-
-            // Send data to Google Apps Script Web App
-            try {
-                await fetch(GAS_WEB_APP_URL, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(orderPayload)
-                });
-            } catch (err) {
-                console.warn('Gagal mengirim data ke Google Sheets:', err);
-            }
-
-            submitBtn.disabled = false;
-            submitBtn.innerHTML = `<i class="fa-solid fa-paper-plane"></i> Kirim Pesanan ke Kasir`;
-
-            // Display Success Modal & QR Code
-            document.getElementById('display-order-code').innerText = orderCode;
-            document.getElementById('modal-cust-info').innerText = `${name} (${phone})`;
-
-            const qrcodeBox = document.getElementById('qrcode-box');
-            qrcodeBox.innerHTML = '';
-            new QRCode(qrcodeBox, {
-                text: orderCode,
-                width: 120,
-                height: 120
-            });
-
-            document.getElementById('modal-order-success').classList.remove('hidden');
-            showToast('Pesanan berhasil dikirim ke Kasir & Google Sheets!', 'fa-circle-check');
         }
 
         function sendOrderViaWhatsApp() {
             if (!activeOrder) return;
 
-            const adminPhone = '6281234567890'; // Phone number admin toko
+            const adminPhone = '6281234567890'; // Ubah sesuai nomor WhatsApp Admin
             let text = `Halo Admin Smart Percetakan Digital,\n\nSaya ingin mengonfirmasi pesanan cetak mandiri:\n\n` +
                        `*Kode Order:* ${activeOrder.orderCode}\n` +
                        `*Nama:* ${activeOrder.customer.name}\n` +
@@ -629,6 +615,8 @@
             document.getElementById('cust-name').value = '';
             document.getElementById('cust-phone').value = '';
             document.getElementById('opt-notes').value = '';
+            document.getElementById('file-pdf').value = '';
+            document.getElementById('file-photo').value = '';
             pdfFileData = null;
             photoFileData = null;
             document.getElementById('pdf-summary-box').classList.add('hidden');
