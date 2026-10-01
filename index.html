@@ -226,7 +226,7 @@
                         <p class="text-[10px] text-slate-400">Harga final akan dikonfirmasi kembali saat pembayaran di kasir.</p>
                     </div>
 
-                    <button onclick="submitCustomerOrder()" class="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-all">
+                    <button id="btn-submit-order" onclick="submitCustomerOrder()" class="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-all">
                         <i class="fa-solid fa-paper-plane"></i> Kirim Pesanan ke Kasir
                     </button>
                 </div>
@@ -273,6 +273,9 @@
     </div>
 
     <script>
+        // Google Apps Script Web App Endpoint URL
+        const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxaretRu9wGxAi9rtuhDkwIL6qoux3hUhdp_pTMN29uJLNbkfAa_yn1ejPBucRWGUs-/exec';
+
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
         // Order State Variables
@@ -476,7 +479,7 @@
             document.getElementById('grand-total-price').innerText = `Rp ${totalEst.toLocaleString('id-ID')}`;
         }
 
-        function submitCustomerOrder() {
+        async function submitCustomerOrder() {
             const name = document.getElementById('cust-name').value.trim();
             const phone = document.getElementById('cust-phone').value.trim();
 
@@ -486,7 +489,7 @@
             }
 
             if (currentUploadType === 'pdf' && !pdfFileData) {
-                showToast('Silakan ungah file PDF terlebih dahulu!', 'fa-triangle-exclamation');
+                showToast('Silakan unggah file PDF terlebih dahulu!', 'fa-triangle-exclamation');
                 return;
             }
 
@@ -494,6 +497,10 @@
                 showToast('Silakan unggah foto terlebih dahulu!', 'fa-triangle-exclamation');
                 return;
             }
+
+            const submitBtn = document.getElementById('btn-submit-order');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Mengirim Pesanan...`;
 
             const copies = parseInt(document.getElementById('opt-copies').value) || 1;
             const paperSize = document.getElementById('opt-paper-size').value;
@@ -566,6 +573,21 @@
                 broadcastChannel.postMessage({ type: 'NEW_ORDER', order: orderPayload });
             }
 
+            // Send data to Google Apps Script Web App
+            try {
+                await fetch(GAS_WEB_APP_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(orderPayload)
+                });
+            } catch (err) {
+                console.warn('Gagal mengirim data ke Google Sheets:', err);
+            }
+
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = `<i class="fa-solid fa-paper-plane"></i> Kirim Pesanan ke Kasir`;
+
             // Display Success Modal & QR Code
             document.getElementById('display-order-code').innerText = orderCode;
             document.getElementById('modal-cust-info').innerText = `${name} (${phone})`;
@@ -579,7 +601,7 @@
             });
 
             document.getElementById('modal-order-success').classList.remove('hidden');
-            showToast('Pesanan berhasil dikirim ke Kasir!', 'fa-circle-check');
+            showToast('Pesanan berhasil dikirim ke Kasir & Google Sheets!', 'fa-circle-check');
         }
 
         function sendOrderViaWhatsApp() {
